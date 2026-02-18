@@ -43,7 +43,18 @@ public enum Status {
     OPEN("open", "Open"),
     IN_PROGRESS("in_progress", "In Progress"),
     RESOLVED("resolved", "Resolved"),
-    DISMISSED("dismissed", "Dismissed");
+    DISMISSED("dismissed", "Dismissed"),
+
+    // === Enrichment workspace ===
+    IN_REVIEW("in_review", "In Review"),
+    ADJUSTED("adjusted", "Adjusted"),
+    READY("ready", "Ready"),
+    SUPERSEDED("superseded", "Superseded"),
+
+    // === Posting operation ===
+    PENDING("pending", "Pending"),
+    POSTING("posting", "Posting"),
+    REVOKED("revoked", "Revoked");
 
     private final String code;
     private final String label;

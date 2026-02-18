@@ -40,8 +40,13 @@ public class EntityTypeTest {
     }
 
     @Test
-    public void totalEntityTypeCount_is6() {
-        assertEquals(6, EntityType.values().length);
+    public void postingOperation_tableName() {
+        assertEquals("posting_operation", EntityType.POSTING_OPERATION.getTableName());
+    }
+
+    @Test
+    public void totalEntityTypeCount_is7() {
+        assertEquals(7, EntityType.values().length);
     }
 
     @Test

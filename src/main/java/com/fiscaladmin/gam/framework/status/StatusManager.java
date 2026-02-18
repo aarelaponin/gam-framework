@@ -69,15 +69,23 @@ public class StatusManager {
         secuMap.put(Status.MANUAL_REVIEW,  EnumSet.of(Status.NEW, Status.ENRICHED, Status.PAIRED));
         map.put(EntityType.SECU_TRX, Collections.unmodifiableMap(secuMap));
 
-        // --- ENRICHMENT ---
+        // --- ENRICHMENT --- (Enrichment Workspace lifecycle - 11 from-states)
         Map<Status, Set<Status>> enrMap = new EnumMap<>(Status.class);
-        enrMap.put(Status.NEW,            EnumSet.of(Status.ENRICHED, Status.ERROR, Status.MANUAL_REVIEW));
-        enrMap.put(Status.ENRICHED,       EnumSet.of(Status.PAIRED, Status.POSTING_READY, Status.UNMATCHED, Status.MANUAL_REVIEW));
-        enrMap.put(Status.PAIRED,         EnumSet.of(Status.POSTED));
-        enrMap.put(Status.POSTING_READY,  EnumSet.of(Status.POSTED));
-        enrMap.put(Status.UNMATCHED,      EnumSet.of(Status.PAIRED, Status.MANUAL_REVIEW));
-        enrMap.put(Status.ERROR,          EnumSet.of(Status.NEW));
-        enrMap.put(Status.MANUAL_REVIEW,  EnumSet.of(Status.NEW, Status.ENRICHED, Status.POSTING_READY));
+        // Pipeline creates
+        enrMap.put(Status.NEW,            EnumSet.of(Status.PROCESSING));
+        enrMap.put(Status.PROCESSING,     EnumSet.of(Status.ENRICHED, Status.ERROR, Status.MANUAL_REVIEW));
+        // Customer works
+        enrMap.put(Status.ENRICHED,       EnumSet.of(Status.IN_REVIEW, Status.ADJUSTED, Status.READY,
+                                                      Status.PAIRED, Status.MANUAL_REVIEW, Status.SUPERSEDED));
+        enrMap.put(Status.IN_REVIEW,      EnumSet.of(Status.ADJUSTED, Status.READY, Status.ENRICHED));
+        enrMap.put(Status.ADJUSTED,       EnumSet.of(Status.READY, Status.IN_REVIEW, Status.ENRICHED));
+        enrMap.put(Status.READY,          EnumSet.of(Status.CONFIRMED, Status.ENRICHED, Status.IN_REVIEW));
+        enrMap.put(Status.PAIRED,         EnumSet.of(Status.READY, Status.MANUAL_REVIEW));
+        // Terminal/special
+        enrMap.put(Status.CONFIRMED,      Collections.emptySet());
+        enrMap.put(Status.SUPERSEDED,     Collections.emptySet());
+        enrMap.put(Status.ERROR,          EnumSet.of(Status.NEW, Status.MANUAL_REVIEW));
+        enrMap.put(Status.MANUAL_REVIEW,  EnumSet.of(Status.NEW, Status.ENRICHED, Status.READY));
         map.put(EntityType.ENRICHMENT, Collections.unmodifiableMap(enrMap));
 
         // --- PAIR ---
@@ -95,6 +103,15 @@ public class StatusManager {
         excMap.put(Status.RESOLVED,    Collections.emptySet());
         excMap.put(Status.DISMISSED,   Collections.emptySet());
         map.put(EntityType.EXCEPTION, Collections.unmodifiableMap(excMap));
+
+        // --- POSTING_OPERATION ---
+        Map<Status, Set<Status>> postOpMap = new EnumMap<>(Status.class);
+        postOpMap.put(Status.PENDING,  EnumSet.of(Status.POSTING, Status.REVOKED));
+        postOpMap.put(Status.POSTING,  EnumSet.of(Status.POSTED, Status.ERROR));
+        postOpMap.put(Status.POSTED,   Collections.emptySet());
+        postOpMap.put(Status.ERROR,    EnumSet.of(Status.PENDING, Status.REVOKED));
+        postOpMap.put(Status.REVOKED,  Collections.emptySet());
+        map.put(EntityType.POSTING_OPERATION, Collections.unmodifiableMap(postOpMap));
 
         TRANSITIONS = Collections.unmodifiableMap(map);
     }
@@ -257,6 +274,8 @@ public class StatusManager {
                         || targetStatus == Status.PENDING_REVIEW;
             case EXCEPTION:
                 return targetStatus == Status.OPEN;
+            case POSTING_OPERATION:
+                return targetStatus == Status.PENDING;
             default:
                 return false;
         }

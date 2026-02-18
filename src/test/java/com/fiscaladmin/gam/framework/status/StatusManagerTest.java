@@ -303,9 +303,9 @@ public class StatusManagerTest {
     // ════════════════════════════════════════════════════════════════
 
     @Test
-    public void transitionMap_has6EntityTypes() {
+    public void transitionMap_has7EntityTypes() {
         Map<EntityType, Map<Status, Set<Status>>> map = StatusManager.getTransitionMap();
-        assertEquals(6, map.size());
+        assertEquals(7, map.size());
     }
 
     @Test
@@ -324,8 +324,8 @@ public class StatusManagerTest {
     }
 
     @Test
-    public void enrichment_has7FromStates() {
-        assertEquals(7, StatusManager.getTransitionMap().get(EntityType.ENRICHMENT).size());
+    public void enrichment_has11FromStates() {
+        assertEquals(11, StatusManager.getTransitionMap().get(EntityType.ENRICHMENT).size());
     }
 
     @Test
@@ -336,6 +336,11 @@ public class StatusManagerTest {
     @Test
     public void exception_has4FromStates() {
         assertEquals(4, StatusManager.getTransitionMap().get(EntityType.EXCEPTION).size());
+    }
+
+    @Test
+    public void postingOperation_has5FromStates() {
+        assertEquals(5, StatusManager.getTransitionMap().get(EntityType.POSTING_OPERATION).size());
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -385,6 +390,165 @@ public class StatusManagerTest {
         when(mockDao.load(table, table, "MISSING")).thenReturn(null);
         statusManager.transition(mockDao, EntityType.STATEMENT, "MISSING",
                 Status.IMPORTING, "test", "Should fail");
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  10. ENRICHMENT new workspace transitions
+    // ════════════════════════════════════════════════════════════════
+
+    @Test
+    public void enrichment_new_to_processing() throws Exception {
+        mockLoad(EntityType.ENRICHMENT, "E001", "new");
+        statusManager.transition(mockDao, EntityType.ENRICHMENT, "E001",
+                Status.PROCESSING, "pipeline", "Processing started");
+        verifyStatusSaved("trx_enrichment", "processing");
+    }
+
+    @Test
+    public void enrichment_enriched_to_inReview() throws Exception {
+        mockLoad(EntityType.ENRICHMENT, "E001", "enriched");
+        statusManager.transition(mockDao, EntityType.ENRICHMENT, "E001",
+                Status.IN_REVIEW, "OPERATOR", "Customer reviewing");
+        verifyStatusSaved("trx_enrichment", "in_review");
+    }
+
+    @Test
+    public void enrichment_enriched_to_adjusted() throws Exception {
+        mockLoad(EntityType.ENRICHMENT, "E001", "enriched");
+        statusManager.transition(mockDao, EntityType.ENRICHMENT, "E001",
+                Status.ADJUSTED, "OPERATOR", "Customer made adjustments");
+        verifyStatusSaved("trx_enrichment", "adjusted");
+    }
+
+    @Test
+    public void enrichment_enriched_to_ready() throws Exception {
+        mockLoad(EntityType.ENRICHMENT, "E001", "enriched");
+        statusManager.transition(mockDao, EntityType.ENRICHMENT, "E001",
+                Status.READY, "OPERATOR", "Ready for posting");
+        verifyStatusSaved("trx_enrichment", "ready");
+    }
+
+    @Test
+    public void enrichment_inReview_to_adjusted() throws Exception {
+        mockLoad(EntityType.ENRICHMENT, "E001", "in_review");
+        statusManager.transition(mockDao, EntityType.ENRICHMENT, "E001",
+                Status.ADJUSTED, "OPERATOR", "Adjustments made");
+        verifyStatusSaved("trx_enrichment", "adjusted");
+    }
+
+    @Test
+    public void enrichment_adjusted_to_ready() throws Exception {
+        mockLoad(EntityType.ENRICHMENT, "E001", "adjusted");
+        statusManager.transition(mockDao, EntityType.ENRICHMENT, "E001",
+                Status.READY, "OPERATOR", "Ready for posting");
+        verifyStatusSaved("trx_enrichment", "ready");
+    }
+
+    @Test
+    public void enrichment_ready_to_confirmed() throws Exception {
+        mockLoad(EntityType.ENRICHMENT, "E001", "ready");
+        statusManager.transition(mockDao, EntityType.ENRICHMENT, "E001",
+                Status.CONFIRMED, "posting-service", "Confirmed");
+        verifyStatusSaved("trx_enrichment", "confirmed");
+    }
+
+    @Test
+    public void enrichment_enriched_to_superseded() throws Exception {
+        mockLoad(EntityType.ENRICHMENT, "E001", "enriched");
+        statusManager.transition(mockDao, EntityType.ENRICHMENT, "E001",
+                Status.SUPERSEDED, "correction-service", "Superseded by correction");
+        verifyStatusSaved("trx_enrichment", "superseded");
+    }
+
+    @Test
+    public void enrichment_confirmed_isTerminal() {
+        assertTrue(statusManager.getValidTransitions(EntityType.ENRICHMENT, Status.CONFIRMED).isEmpty());
+    }
+
+    @Test
+    public void enrichment_superseded_isTerminal() {
+        assertTrue(statusManager.getValidTransitions(EntityType.ENRICHMENT, Status.SUPERSEDED).isEmpty());
+    }
+
+    @Test(expected = InvalidTransitionException.class)
+    public void enrichment_enriched_to_postingReady_nowFails() throws Exception {
+        // Old transition that is no longer valid in the new map
+        mockLoad(EntityType.ENRICHMENT, "E001", "enriched");
+        statusManager.transition(mockDao, EntityType.ENRICHMENT, "E001",
+                Status.POSTING_READY, "test", "Should fail - old transition removed");
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  11. POSTING_OPERATION transitions
+    // ════════════════════════════════════════════════════════════════
+
+    @Test
+    public void postingOperation_pending_to_posting() throws Exception {
+        mockLoad(EntityType.POSTING_OPERATION, "PO001", "pending");
+        statusManager.transition(mockDao, EntityType.POSTING_OPERATION, "PO001",
+                Status.POSTING, "posting-service", "Posting started");
+        verifyStatusSaved("posting_operation", "posting");
+    }
+
+    @Test
+    public void postingOperation_posting_to_posted() throws Exception {
+        mockLoad(EntityType.POSTING_OPERATION, "PO001", "posting");
+        statusManager.transition(mockDao, EntityType.POSTING_OPERATION, "PO001",
+                Status.POSTED, "posting-service", "Posting complete");
+        verifyStatusSaved("posting_operation", "posted");
+    }
+
+    @Test
+    public void postingOperation_posting_to_error() throws Exception {
+        mockLoad(EntityType.POSTING_OPERATION, "PO001", "posting");
+        statusManager.transition(mockDao, EntityType.POSTING_OPERATION, "PO001",
+                Status.ERROR, "posting-service", "Posting failed");
+        verifyStatusSaved("posting_operation", "error");
+    }
+
+    @Test
+    public void postingOperation_pending_to_revoked() throws Exception {
+        mockLoad(EntityType.POSTING_OPERATION, "PO001", "pending");
+        statusManager.transition(mockDao, EntityType.POSTING_OPERATION, "PO001",
+                Status.REVOKED, "OPERATOR", "Operation revoked");
+        verifyStatusSaved("posting_operation", "revoked");
+    }
+
+    @Test
+    public void postingOperation_error_to_pending() throws Exception {
+        mockLoad(EntityType.POSTING_OPERATION, "PO001", "error");
+        statusManager.transition(mockDao, EntityType.POSTING_OPERATION, "PO001",
+                Status.PENDING, "OPERATOR", "Retry after fix");
+        verifyStatusSaved("posting_operation", "pending");
+    }
+
+    @Test
+    public void postingOperation_error_to_revoked() throws Exception {
+        mockLoad(EntityType.POSTING_OPERATION, "PO001", "error");
+        statusManager.transition(mockDao, EntityType.POSTING_OPERATION, "PO001",
+                Status.REVOKED, "OPERATOR", "Revoked after error");
+        verifyStatusSaved("posting_operation", "revoked");
+    }
+
+    @Test
+    public void postingOperation_posted_isTerminal() {
+        assertTrue(statusManager.getValidTransitions(EntityType.POSTING_OPERATION, Status.POSTED).isEmpty());
+    }
+
+    @Test
+    public void postingOperation_revoked_isTerminal() {
+        assertTrue(statusManager.getValidTransitions(EntityType.POSTING_OPERATION, Status.REVOKED).isEmpty());
+    }
+
+    @Test
+    public void canTransition_postingOperation_nullCurrentStatus_allowsPending() {
+        assertTrue(statusManager.canTransition(EntityType.POSTING_OPERATION, null, Status.PENDING));
+    }
+
+    @Test
+    public void canTransition_postingOperation_nullCurrentStatus_rejectsNonPending() {
+        assertFalse(statusManager.canTransition(EntityType.POSTING_OPERATION, null, Status.POSTED));
+        assertFalse(statusManager.canTransition(EntityType.POSTING_OPERATION, null, Status.POSTING));
     }
 
     // ── Helpers ─────────────────────────────────────────────────────

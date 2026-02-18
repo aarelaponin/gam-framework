@@ -33,6 +33,17 @@ public class StatusTest {
     @Test public void fromCode_resolved()      { assertEquals(Status.RESOLVED,       Status.fromCode("resolved")); }
     @Test public void fromCode_dismissed()     { assertEquals(Status.DISMISSED,      Status.fromCode("dismissed")); }
 
+    // Enrichment workspace
+    @Test public void fromCode_inReview()      { assertEquals(Status.IN_REVIEW,      Status.fromCode("in_review")); }
+    @Test public void fromCode_adjusted()      { assertEquals(Status.ADJUSTED,       Status.fromCode("adjusted")); }
+    @Test public void fromCode_ready()         { assertEquals(Status.READY,          Status.fromCode("ready")); }
+    @Test public void fromCode_superseded()    { assertEquals(Status.SUPERSEDED,     Status.fromCode("superseded")); }
+
+    // Posting operation
+    @Test public void fromCode_pending()       { assertEquals(Status.PENDING,        Status.fromCode("pending")); }
+    @Test public void fromCode_posting()       { assertEquals(Status.POSTING,        Status.fromCode("posting")); }
+    @Test public void fromCode_revoked()       { assertEquals(Status.REVOKED,        Status.fromCode("revoked")); }
+
     // ── Case insensitivity ──────────────────────────────────────────
 
     @Test
@@ -104,7 +115,7 @@ public class StatusTest {
     // ── Total count ─────────────────────────────────────────────────
 
     @Test
-    public void totalStatusCount_is22() {
-        assertEquals(21, Status.values().length);
+    public void totalStatusCount_is28() {
+        assertEquals(28, Status.values().length);
     }
 }

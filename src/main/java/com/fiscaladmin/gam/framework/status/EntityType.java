@@ -13,7 +13,8 @@ public enum EntityType {
     SECU_TRX("secu_total_trx"),
     ENRICHMENT("trx_enrichment"),
     PAIR("trx_pair"),
-    EXCEPTION("exception_queue");
+    EXCEPTION("exception_queue"),
+    POSTING_OPERATION("posting_operation");
 
     private final String tableName;
 
