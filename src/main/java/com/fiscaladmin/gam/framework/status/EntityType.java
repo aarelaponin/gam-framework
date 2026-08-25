@@ -11,7 +11,7 @@ public enum EntityType {
     STATEMENT("bank_statement"),
     BANK_TRX("bank_total_trx"),
     SECU_TRX("secu_total_trx"),
-    ENRICHMENT("trx_enrichment"),
+    ENRICHMENT("trxEnrichment"),
     PAIR("trx_pair"),
     EXCEPTION("exception_queue"),
     POSTING_OPERATION("posting_operation");

@@ -10,12 +10,12 @@ import java.util.UUID;
  * <p>
  * Timestamp is auto-generated at creation time using ISO 8601 format.
  */
-public class TransitionAuditEntry {
+public final class TransitionAuditEntry {
 
-    private final String entityType;
+    private final EntityType entityType;
     private final String entityId;
-    private final String fromStatus;
-    private final String toStatus;
+    private final Status fromStatus;
+    private final Status toStatus;
     private final String triggeredBy;
     private final String reason;
     private final String timestamp;
@@ -23,15 +23,15 @@ public class TransitionAuditEntry {
     /**
      * Creates a new audit entry. Timestamp is set automatically to now.
      *
-     * @param entityType  e.g., "STATEMENT", "BANK_TRX"
+     * @param entityType  the entity type
      * @param entityId    the record ID
-     * @param fromStatus  previous status code
-     * @param toStatus    new status code
+     * @param fromStatus  previous status (may be {@code null} for initial transitions)
+     * @param toStatus    new status
      * @param triggeredBy plugin name (e.g., "statement-importer") or "OPERATOR"
      * @param reason      human-readable explanation
      */
-    public TransitionAuditEntry(String entityType, String entityId,
-                                String fromStatus, String toStatus,
+    public TransitionAuditEntry(EntityType entityType, String entityId,
+                                Status fromStatus, Status toStatus,
                                 String triggeredBy, String reason) {
         this.entityType = entityType;
         this.entityId = entityId;
@@ -42,7 +42,7 @@ public class TransitionAuditEntry {
         this.timestamp = Instant.now().toString();
     }
 
-    public String getEntityType() {
+    public EntityType getEntityType() {
         return entityType;
     }
 
@@ -50,11 +50,11 @@ public class TransitionAuditEntry {
         return entityId;
     }
 
-    public String getFromStatus() {
+    public Status getFromStatus() {
         return fromStatus;
     }
 
-    public String getToStatus() {
+    public Status getToStatus() {
         return toStatus;
     }
 
@@ -77,10 +77,10 @@ public class TransitionAuditEntry {
     public FormRow toFormRow() {
         FormRow row = new FormRow();
         row.setId(UUID.randomUUID().toString());
-        row.setProperty("entity_type", entityType);
+        row.setProperty("entity_type", entityType.toString());
         row.setProperty("entity_id", entityId);
-        row.setProperty("from_status", fromStatus);
-        row.setProperty("to_status", toStatus);
+        row.setProperty("from_status", fromStatus != null ? fromStatus.getCode() : "null");
+        row.setProperty("to_status", toStatus.getCode());
         row.setProperty("triggered_by", triggeredBy);
         row.setProperty("reason", reason);
         row.setProperty("timestamp", timestamp);

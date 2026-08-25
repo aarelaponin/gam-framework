@@ -21,6 +21,8 @@ import java.util.*;
  * <p>
  * The transition map is the <b>single source of truth</b> for allowed transitions.
  * No status changes should bypass this class.
+ * <p>
+ * All public methods are {@code static} — no instance creation required.
  */
 public class StatusManager {
 
@@ -32,6 +34,7 @@ public class StatusManager {
     // ──────────────────────────────────────────────────────────────────
 
     private static final Map<EntityType, Map<Status, Set<Status>>> TRANSITIONS;
+    private static final Map<EntityType, Set<Status>> INITIAL_STATUS_MAP;
 
     static {
         Map<EntityType, Map<Status, Set<Status>>> map = new EnumMap<>(EntityType.class);
@@ -77,9 +80,9 @@ public class StatusManager {
         // Customer works
         enrMap.put(Status.ENRICHED,       EnumSet.of(Status.IN_REVIEW, Status.ADJUSTED, Status.READY,
                                                       Status.PAIRED, Status.MANUAL_REVIEW, Status.SUPERSEDED));
-        enrMap.put(Status.IN_REVIEW,      EnumSet.of(Status.ADJUSTED, Status.READY, Status.ENRICHED));
-        enrMap.put(Status.ADJUSTED,       EnumSet.of(Status.READY, Status.IN_REVIEW, Status.ENRICHED));
-        enrMap.put(Status.READY,          EnumSet.of(Status.CONFIRMED, Status.ENRICHED, Status.IN_REVIEW));
+        enrMap.put(Status.IN_REVIEW,      EnumSet.of(Status.ADJUSTED, Status.READY, Status.ENRICHED, Status.SUPERSEDED));
+        enrMap.put(Status.ADJUSTED,       EnumSet.of(Status.READY, Status.IN_REVIEW, Status.ENRICHED, Status.SUPERSEDED));
+        enrMap.put(Status.READY,          EnumSet.of(Status.CONFIRMED, Status.ENRICHED, Status.IN_REVIEW, Status.SUPERSEDED));
         enrMap.put(Status.PAIRED,         EnumSet.of(Status.READY, Status.MANUAL_REVIEW));
         // Terminal/special
         enrMap.put(Status.CONFIRMED,      Collections.emptySet());
@@ -114,6 +117,17 @@ public class StatusManager {
         map.put(EntityType.POSTING_OPERATION, Collections.unmodifiableMap(postOpMap));
 
         TRANSITIONS = Collections.unmodifiableMap(map);
+
+        // --- INITIAL STATUS MAP ---
+        Map<EntityType, Set<Status>> initMap = new EnumMap<>(EntityType.class);
+        initMap.put(EntityType.STATEMENT,         EnumSet.of(Status.NEW));
+        initMap.put(EntityType.BANK_TRX,          EnumSet.of(Status.NEW));
+        initMap.put(EntityType.SECU_TRX,          EnumSet.of(Status.NEW));
+        initMap.put(EntityType.ENRICHMENT,        EnumSet.of(Status.NEW));
+        initMap.put(EntityType.PAIR,              EnumSet.of(Status.AUTO_ACCEPTED, Status.PENDING_REVIEW));
+        initMap.put(EntityType.EXCEPTION,         EnumSet.of(Status.OPEN));
+        initMap.put(EntityType.POSTING_OPERATION, EnumSet.of(Status.PENDING));
+        INITIAL_STATUS_MAP = Collections.unmodifiableMap(initMap);
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -132,14 +146,14 @@ public class StatusManager {
      * @param reason       human-readable explanation
      * @throws InvalidTransitionException if the transition is not allowed
      */
-    public void transition(FormDataDao dao, EntityType entityType, String recordId,
-                           Status targetStatus, String triggeredBy, String reason)
+    public static void transition(FormDataDao dao, EntityType entityType, String recordId,
+                                  Status targetStatus, String triggeredBy, String reason)
             throws InvalidTransitionException {
 
         String tableName = entityType.getTableName();
 
         // 1. Load current record
-        FormRow row = dao.load(tableName, tableName, recordId);
+        FormRow row = dao.load(null, tableName, recordId);
         if (row == null) {
             throw new IllegalStateException(
                     "Record not found: " + entityType + " / " + recordId);
@@ -150,6 +164,11 @@ public class StatusManager {
         Status currentStatus = null;
         if (currentStatusCode != null && !currentStatusCode.isEmpty()) {
             currentStatus = Status.fromCode(currentStatusCode);
+            if (currentStatus == null) {
+                throw new IllegalStateException(
+                        "Unrecognized status code in database: '" + currentStatusCode
+                                + "' for " + entityType + " / " + recordId);
+            }
         }
 
         // 3. Validate
@@ -162,21 +181,89 @@ public class StatusManager {
         row.setProperty("status", targetStatus.getCode());
         FormRowSet rowSet = new FormRowSet();
         rowSet.add(row);
-        dao.saveOrUpdate(tableName, tableName, rowSet);
+        dao.saveOrUpdate(null, tableName, rowSet);
 
         // 5. Write audit
-        String fromCode = currentStatus != null ? currentStatus.getCode() : "null";
         TransitionAuditEntry audit = new TransitionAuditEntry(
-                entityType.toString(), recordId,
-                fromCode, targetStatus.getCode(),
+                entityType, recordId,
+                currentStatus, targetStatus,
                 triggeredBy, reason);
         FormRowSet auditRowSet = new FormRowSet();
         auditRowSet.add(audit.toFormRow());
         dao.saveOrUpdate(AUDIT_TABLE, AUDIT_TABLE, auditRowSet);
 
         // 6. Log
+        String fromCodeStr = currentStatus != null ? currentStatus.getCode() : "null";
         LogUtil.info(CLASS_NAME, "Status transition: " + entityType
-                + " " + recordId + " " + fromCode + " → " + targetStatus.getCode());
+                + " " + recordId + " " + fromCodeStr + " → " + targetStatus.getCode());
+    }
+
+    /**
+     * Transition an entity's status using an explicit table name.
+     * <p>
+     * Use this overload when the actual Joget form table name differs from
+     * {@link EntityType#getTableName()}. The transition map still uses
+     * {@code entityType} for validation — only DB I/O uses the provided
+     * {@code tableName}.
+     *
+     * @param dao          Joget FormDataDao
+     * @param tableName    the actual Joget form table name for DB operations
+     * @param entityType   the entity being transitioned (for transition-map lookup)
+     * @param recordId     the primary key of the record
+     * @param targetStatus the desired new status
+     * @param triggeredBy  plugin name (e.g., "enrichment-api") or "OPERATOR"
+     * @param reason       human-readable explanation
+     * @throws InvalidTransitionException if the transition is not allowed
+     */
+    public static void transition(FormDataDao dao, String tableName, EntityType entityType,
+                                  String recordId, Status targetStatus,
+                                  String triggeredBy, String reason)
+            throws InvalidTransitionException {
+
+        // 1. Load current record
+        FormRow row = dao.load(null, tableName, recordId);
+        if (row == null) {
+            throw new IllegalStateException(
+                    "Record not found: " + entityType + " / " + recordId);
+        }
+
+        // 2. Read current status
+        String currentStatusCode = row.getProperty("status");
+        Status currentStatus = null;
+        if (currentStatusCode != null && !currentStatusCode.isEmpty()) {
+            currentStatus = Status.fromCode(currentStatusCode);
+            if (currentStatus == null) {
+                throw new IllegalStateException(
+                        "Unrecognized status code in database: '" + currentStatusCode
+                                + "' for " + entityType + " / " + recordId);
+            }
+        }
+
+        // 3. Validate
+        if (!canTransition(entityType, currentStatus, targetStatus)) {
+            throw new InvalidTransitionException(entityType, recordId,
+                    currentStatus, targetStatus);
+        }
+
+        // 4. Write new status
+        row.setProperty("status", targetStatus.getCode());
+        FormRowSet rowSet = new FormRowSet();
+        rowSet.add(row);
+        dao.saveOrUpdate(null, tableName, rowSet);
+
+        // 5. Write audit
+        TransitionAuditEntry audit = new TransitionAuditEntry(
+                entityType, recordId,
+                currentStatus, targetStatus,
+                triggeredBy, reason);
+        FormRowSet auditRowSet = new FormRowSet();
+        auditRowSet.add(audit.toFormRow());
+        dao.saveOrUpdate(AUDIT_TABLE, AUDIT_TABLE, auditRowSet);
+
+        // 6. Log
+        String fromCodeStr = currentStatus != null ? currentStatus.getCode() : "null";
+        LogUtil.info(CLASS_NAME, "Status transition: " + entityType
+                + " " + recordId + " " + fromCodeStr + " → " + targetStatus.getCode());
     }
 
     /**
@@ -187,8 +274,8 @@ public class StatusManager {
      * allowed: NEW for most entities, OPEN for exceptions, AUTO_ACCEPTED or
      * PENDING_REVIEW for pairs.
      */
-    public boolean canTransition(EntityType entityType, Status currentStatus,
-                                 Status targetStatus) {
+    public static boolean canTransition(EntityType entityType, Status currentStatus,
+                                        Status targetStatus) {
         if (entityType == null || targetStatus == null) {
             return false;
         }
@@ -215,7 +302,7 @@ public class StatusManager {
      * current status. Returns an empty set if the current status is terminal
      * or if the entity/status combination is not found.
      */
-    public Set<Status> getValidTransitions(EntityType entityType, Status currentStatus) {
+    public static Set<Status> getValidTransitions(EntityType entityType, Status currentStatus) {
         if (entityType == null || currentStatus == null) {
             return Collections.emptySet();
         }
@@ -228,6 +315,22 @@ public class StatusManager {
             return Collections.emptySet();
         }
         return Collections.unmodifiableSet(targets);
+    }
+
+    /**
+     * Checks whether the target status is a valid initial status for the entity.
+     * This handles the case where a record has no status field set yet.
+     *
+     * @param entityType   the entity type
+     * @param targetStatus the status to check
+     * @return {@code true} if {@code targetStatus} is a valid initial status for the entity
+     */
+    public static boolean isInitialStatus(EntityType entityType, Status targetStatus) {
+        if (entityType == null || targetStatus == null) {
+            return false;
+        }
+        Set<Status> initial = INITIAL_STATUS_MAP.get(entityType);
+        return initial != null && initial.contains(targetStatus);
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -253,31 +356,10 @@ public class StatusManager {
         return TRANSITIONS;
     }
 
-    // ──────────────────────────────────────────────────────────────────
-    //  Private helpers
-    // ──────────────────────────────────────────────────────────────────
-
     /**
-     * Checks whether the target status is a valid initial status for the entity.
-     * This handles the case where a record has no status field set yet.
+     * Returns the initial status map for testing purposes.
      */
-    private boolean isInitialStatus(EntityType entityType, Status targetStatus) {
-        switch (entityType) {
-            case STATEMENT:
-            case BANK_TRX:
-            case SECU_TRX:
-                return targetStatus == Status.NEW;
-            case ENRICHMENT:
-                return targetStatus == Status.NEW;
-            case PAIR:
-                return targetStatus == Status.AUTO_ACCEPTED
-                        || targetStatus == Status.PENDING_REVIEW;
-            case EXCEPTION:
-                return targetStatus == Status.OPEN;
-            case POSTING_OPERATION:
-                return targetStatus == Status.PENDING;
-            default:
-                return false;
-        }
+    static Map<EntityType, Set<Status>> getInitialStatusMap() {
+        return INITIAL_STATUS_MAP;
     }
 }
