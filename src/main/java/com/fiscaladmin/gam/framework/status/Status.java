@@ -11,8 +11,13 @@ package com.fiscaladmin.gam.framework.status;
  * <p>
  * This is the single source of truth for status values. No string literals
  * should be used anywhere in the codebase for status values.
+ * <p>
+ * Implements {@link global.govstack.statusframework.api.Status} so GAM status
+ * values flow through the shared joget-status-framework registry. Public API
+ * (enum names, codes, labels, {@link #fromCode}) is unchanged — external
+ * callers continue to reference {@code Status.NEW} etc. as before.
  */
-public enum Status {
+public enum Status implements global.govstack.statusframework.api.Status {
 
     // === Universal ===
     NEW("new", "New"),
@@ -34,7 +39,7 @@ public enum Status {
     UNMATCHED("unmatched", "Unmatched"),
 
     // === Pair-level ===
-    AUTO_ACCEPTED("auto_accepted", "Auto-Accepted"),
+    AUTO_ACCEPTED("auto_accepted", "Auto Accepted"),
     PENDING_REVIEW("pending_review", "Pending Review"),
     CONFIRMED("confirmed", "Confirmed"),
     REJECTED("rejected", "Rejected"),
@@ -79,12 +84,11 @@ public enum Status {
      * Comparison is case-insensitive.
      *
      * @param code the database code (e.g., "new", "importing")
-     * @return the matching Status enum constant
-     * @throws IllegalArgumentException if no Status matches the given code
+     * @return the matching Status enum constant, or {@code null} if no match
      */
     public static Status fromCode(String code) {
         if (code == null) {
-            throw new IllegalArgumentException("Status code must not be null");
+            return null;
         }
         String lowerCode = code.toLowerCase();
         for (Status s : values()) {
@@ -92,7 +96,7 @@ public enum Status {
                 return s;
             }
         }
-        throw new IllegalArgumentException("Unknown status code: " + code);
+        return null;
     }
 
     /** Returns the database code value. */

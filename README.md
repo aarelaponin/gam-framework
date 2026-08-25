@@ -18,6 +18,12 @@ Add as a dependency in your plugin's `pom.xml`:
 </dependency>
 ```
 
+Deploy the built JAR to Joget's shared classpath:
+
+```bash
+cp target/gam-framework-8.1-SNAPSHOT.jar {JOGET_HOME}/wflow/lib/
+```
+
 ## Usage
 
 ### Transitioning Status
@@ -28,9 +34,8 @@ import com.fiscaladmin.gam.framework.status.*;
 // Get the DAO from Joget's Spring context
 FormDataDao dao = StatusManager.getFormDataDao();
 
-// Create manager and transition
-StatusManager manager = new StatusManager();
-manager.transition(
+// Transition (all methods are static)
+StatusManager.transition(
     dao,
     EntityType.BANK_TRX,
     recordId,
@@ -40,18 +45,30 @@ manager.transition(
 );
 ```
 
+When the Joget form table name differs from `EntityType.getTableName()`, use the custom-table overload:
+
+```java
+StatusManager.transition(
+    dao,
+    "trxEnrichment",         // actual Joget form table name
+    EntityType.ENRICHMENT,   // entity type (for transition validation)
+    recordId,
+    Status.IN_REVIEW,
+    "enrichment-api",
+    "Customer opened for review"
+);
+```
+
 ### Validating Before Transition
 
 ```java
-StatusManager manager = new StatusManager();
-
 // Check if transition is allowed (no DB access)
-if (manager.canTransition(EntityType.BANK_TRX, Status.PROCESSING, Status.ENRICHED)) {
+if (StatusManager.canTransition(EntityType.BANK_TRX, Status.PROCESSING, Status.ENRICHED)) {
     // proceed
 }
 
 // Get all valid next states
-Set<Status> validTargets = manager.getValidTransitions(EntityType.BANK_TRX, Status.PROCESSING);
+Set<Status> validTargets = StatusManager.getValidTransitions(EntityType.BANK_TRX, Status.PROCESSING);
 ```
 
 ### Using Status Enum
@@ -65,7 +82,31 @@ row.setProperty("status", Status.ENRICHED.getCode());
 String label = Status.ENRICHED.getLabel(); // "Enriched"
 ```
 
+### Handling Transition Errors
+
+```java
+try {
+    StatusManager.transition(dao, EntityType.STATEMENT, recordId,
+            Status.POSTED, "my-plugin", "Posting complete");
+} catch (InvalidTransitionException e) {
+    // e.getEntityType(), e.getRecordId(), e.getFromStatus(), e.getToStatus()
+    LogUtil.error(getClass().getName(), e, e.getMessage());
+}
+```
+
 ## Architecture
+
+### Entity Types
+
+| Entity | Table Name | Initial Status | Description |
+|--------|------------|----------------|-------------|
+| `STATEMENT` | `bank_statement` | `NEW` | Bank statement files |
+| `BANK_TRX` | `bank_total_trx` | `NEW` | Bank transactions |
+| `SECU_TRX` | `secu_total_trx` | `NEW` | Security transactions |
+| `ENRICHMENT` | `trxEnrichment` | `NEW` | Transaction enrichment workspace records |
+| `PAIR` | `trx_pair` | `AUTO_ACCEPTED` / `PENDING_REVIEW` | Transaction pairing records |
+| `EXCEPTION` | `exception_queue` | `OPEN` | Exception queue items |
+| `POSTING_OPERATION` | `posting_operation` | `PENDING` | GL posting commitment records |
 
 ### State Machine Diagrams
 
@@ -130,27 +171,49 @@ stateDiagram-v2
     POSTED --> [*]
 ```
 
-#### Enrichment Lifecycle
+#### Enrichment Workspace Lifecycle
 
 ```mermaid
 stateDiagram-v2
     [*] --> NEW
-    NEW --> ENRICHED
-    NEW --> ERROR
-    NEW --> MANUAL_REVIEW
+    NEW --> PROCESSING
+    PROCESSING --> ENRICHED
+    PROCESSING --> ERROR
+    PROCESSING --> MANUAL_REVIEW
+
+    ENRICHED --> IN_REVIEW
+    ENRICHED --> ADJUSTED
+    ENRICHED --> READY
     ENRICHED --> PAIRED
-    ENRICHED --> POSTING_READY
-    ENRICHED --> UNMATCHED
     ENRICHED --> MANUAL_REVIEW
-    PAIRED --> POSTED
-    POSTING_READY --> POSTED
-    UNMATCHED --> PAIRED
-    UNMATCHED --> MANUAL_REVIEW
+    ENRICHED --> SUPERSEDED
+
+    IN_REVIEW --> ADJUSTED
+    IN_REVIEW --> READY
+    IN_REVIEW --> ENRICHED
+    IN_REVIEW --> SUPERSEDED
+
+    ADJUSTED --> READY
+    ADJUSTED --> IN_REVIEW
+    ADJUSTED --> ENRICHED
+    ADJUSTED --> SUPERSEDED
+
+    READY --> CONFIRMED
+    READY --> ENRICHED
+    READY --> IN_REVIEW
+    READY --> SUPERSEDED
+
+    PAIRED --> READY
+    PAIRED --> MANUAL_REVIEW
+
     ERROR --> NEW
+    ERROR --> MANUAL_REVIEW
     MANUAL_REVIEW --> NEW
     MANUAL_REVIEW --> ENRICHED
-    MANUAL_REVIEW --> POSTING_READY
-    POSTED --> [*]
+    MANUAL_REVIEW --> READY
+
+    CONFIRMED --> [*]
+    SUPERSEDED --> [*]
 ```
 
 #### Pair Lifecycle
@@ -179,30 +242,44 @@ stateDiagram-v2
     DISMISSED --> [*]
 ```
 
-### Entity Types
+#### Posting Operation Lifecycle
 
-| Entity | Table Name | Description |
-|--------|------------|-------------|
-| `STATEMENT` | `bank_statement` | Bank statement files |
-| `BANK_TRX` | `bank_total_trx` | Bank transactions |
-| `SECU_TRX` | `secu_total_trx` | Security transactions |
-| `ENRICHMENT` | `trx_enrichment` | Transaction enrichment records |
-| `PAIR` | `trx_pair` | Transaction pairing records |
-| `EXCEPTION` | `exception_queue` | Exception queue items |
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING
+    PENDING --> POSTING
+    PENDING --> REVOKED
+    POSTING --> POSTED
+    POSTING --> ERROR
+    ERROR --> PENDING
+    ERROR --> REVOKED
+    POSTED --> [*]
+    REVOKED --> [*]
+```
 
 ### Audit Logging
 
 Every transition automatically writes to the `audit_log` table:
 
-| Field | Description |
+| Field | Description | Example |
+|-------|-------------|---------|
+| `entity_type` | Entity type name | `STATEMENT`, `BANK_TRX` |
+| `entity_id` | Record primary key | `S001` |
+| `from_status` | Previous status code | `new`, `null` (initial) |
+| `to_status` | New status code | `importing` |
+| `triggered_by` | Plugin name or `"OPERATOR"` | `statement-importer` |
+| `reason` | Human-readable explanation | `File upload started` |
+| `timestamp` | ISO 8601 timestamp | `2026-03-03T10:15:30.123Z` |
+
+### Class Reference
+
+| Class | Description |
 |-------|-------------|
-| `entity_type` | STATEMENT, BANK_TRX, etc. |
-| `entity_id` | Record primary key |
-| `from_status` | Previous status code |
-| `to_status` | New status code |
-| `triggered_by` | Plugin name or "OPERATOR" |
-| `reason` | Human-readable explanation |
-| `timestamp` | ISO 8601 timestamp |
+| `Status` | Enum with 28 values. Each has `getCode()` (DB value) and `getLabel()` (UI label). Use `fromCode(String)` for reverse lookup (returns `null` for unknown codes). |
+| `EntityType` | Enum with 7 values. Each maps to a bare Joget table name via `getTableName()`. |
+| `StatusManager` | All-static API. Validates transitions, writes to entity table, writes audit log. Two `transition()` overloads (standard and custom-table). |
+| `InvalidTransitionException` | Checked exception with `getEntityType()`, `getRecordId()`, `getFromStatus()`, `getToStatus()`. |
+| `TransitionAuditEntry` | Immutable `final` DTO with typed fields (`EntityType`, `Status`). Timestamp auto-generated. `toFormRow()` converts to Joget `FormRow` for persistence. |
 
 ## Building
 
@@ -213,7 +290,7 @@ mvn clean package
 ## Testing
 
 ```bash
-# All tests
+# All tests (128 total)
 mvn test
 
 # Single test class

@@ -1,37 +1,39 @@
 package com.fiscaladmin.gam.framework.status;
 
-import org.joget.apps.app.service.AppUtil;
+import global.govstack.statusframework.core.StatusFramework;
+
 import org.joget.apps.form.dao.FormDataDao;
-import org.joget.apps.form.model.FormRow;
-import org.joget.apps.form.model.FormRowSet;
-import org.joget.commons.util.LogUtil;
 
 import java.util.*;
 
 /**
  * Centralised status lifecycle management for all GAM entities.
  * <p>
- * Responsibilities:
- * <ol>
- *   <li>Define all valid status transitions per entity type</li>
- *   <li>Validate transitions before they execute</li>
- *   <li>Write the new status to the entity's Joget form table</li>
- *   <li>Write an audit log entry for every transition</li>
- * </ol>
+ * <b>Phase A2 refactor (2026-04-26):</b> the underlying transition engine,
+ * audit row write, and validation logic now live in
+ * {@link StatusFramework} (joget-status-framework). This class:
+ * <ul>
+ *   <li>Defines the GAM transition map as the single source of truth.</li>
+ *   <li>Registers that map with {@link StatusFramework} at class-load time.</li>
+ *   <li>Exposes a thin static API that delegates to {@link StatusFramework}
+ *       so all existing callers in gam-plugins continue to work without
+ *       any source change.</li>
+ * </ul>
  * <p>
- * The transition map is the <b>single source of truth</b> for allowed transitions.
- * No status changes should bypass this class.
+ * The local {@link #TRANSITIONS} and {@link #INITIAL_STATUS_MAP} maps are
+ * retained for backwards compatibility with the regression-snapshot tests
+ * ({@code TransitionMapSnapshotTest}, {@code InitialStatusMapSnapshotTest})
+ * — they remain the input fed into {@link StatusFramework#register} so the
+ * two views are guaranteed identical.
  */
 public class StatusManager {
-
-    private static final String CLASS_NAME = StatusManager.class.getName();
-    private static final String AUDIT_TABLE = "audit_log";
 
     // ──────────────────────────────────────────────────────────────────
     //  Transition Map — single source of truth
     // ──────────────────────────────────────────────────────────────────
 
     private static final Map<EntityType, Map<Status, Set<Status>>> TRANSITIONS;
+    private static final Map<EntityType, Set<Status>> INITIAL_STATUS_MAP;
 
     static {
         Map<EntityType, Map<Status, Set<Status>>> map = new EnumMap<>(EntityType.class);
@@ -71,17 +73,14 @@ public class StatusManager {
 
         // --- ENRICHMENT --- (Enrichment Workspace lifecycle - 11 from-states)
         Map<Status, Set<Status>> enrMap = new EnumMap<>(Status.class);
-        // Pipeline creates
         enrMap.put(Status.NEW,            EnumSet.of(Status.PROCESSING));
         enrMap.put(Status.PROCESSING,     EnumSet.of(Status.ENRICHED, Status.ERROR, Status.MANUAL_REVIEW));
-        // Customer works
         enrMap.put(Status.ENRICHED,       EnumSet.of(Status.IN_REVIEW, Status.ADJUSTED, Status.READY,
                                                       Status.PAIRED, Status.MANUAL_REVIEW, Status.SUPERSEDED));
-        enrMap.put(Status.IN_REVIEW,      EnumSet.of(Status.ADJUSTED, Status.READY, Status.ENRICHED));
-        enrMap.put(Status.ADJUSTED,       EnumSet.of(Status.READY, Status.IN_REVIEW, Status.ENRICHED));
-        enrMap.put(Status.READY,          EnumSet.of(Status.CONFIRMED, Status.ENRICHED, Status.IN_REVIEW));
+        enrMap.put(Status.IN_REVIEW,      EnumSet.of(Status.ADJUSTED, Status.READY, Status.ENRICHED, Status.SUPERSEDED));
+        enrMap.put(Status.ADJUSTED,       EnumSet.of(Status.READY, Status.IN_REVIEW, Status.ENRICHED, Status.SUPERSEDED));
+        enrMap.put(Status.READY,          EnumSet.of(Status.CONFIRMED, Status.ENRICHED, Status.IN_REVIEW, Status.SUPERSEDED));
         enrMap.put(Status.PAIRED,         EnumSet.of(Status.READY, Status.MANUAL_REVIEW));
-        // Terminal/special
         enrMap.put(Status.CONFIRMED,      Collections.emptySet());
         enrMap.put(Status.SUPERSEDED,     Collections.emptySet());
         enrMap.put(Status.ERROR,          EnumSet.of(Status.NEW, Status.MANUAL_REVIEW));
@@ -114,170 +113,124 @@ public class StatusManager {
         map.put(EntityType.POSTING_OPERATION, Collections.unmodifiableMap(postOpMap));
 
         TRANSITIONS = Collections.unmodifiableMap(map);
+
+        // --- INITIAL STATUS MAP ---
+        Map<EntityType, Set<Status>> initMap = new EnumMap<>(EntityType.class);
+        initMap.put(EntityType.STATEMENT,         EnumSet.of(Status.NEW));
+        initMap.put(EntityType.BANK_TRX,          EnumSet.of(Status.NEW));
+        initMap.put(EntityType.SECU_TRX,          EnumSet.of(Status.NEW));
+        initMap.put(EntityType.ENRICHMENT,        EnumSet.of(Status.NEW));
+        initMap.put(EntityType.PAIR,              EnumSet.of(Status.AUTO_ACCEPTED, Status.PENDING_REVIEW));
+        initMap.put(EntityType.EXCEPTION,         EnumSet.of(Status.OPEN));
+        initMap.put(EntityType.POSTING_OPERATION, EnumSet.of(Status.PENDING));
+        INITIAL_STATUS_MAP = Collections.unmodifiableMap(initMap);
+
+        // ─── Register every entity with the shared StatusFramework ──────────
+        // The framework registry is typed against api.Status / api.EntityType;
+        // our enums implement those interfaces, so we widen the generic types
+        // when copying into framework-shaped maps.
+        for (EntityType et : EntityType.values()) {
+            Map<global.govstack.statusframework.api.Status,
+                Set<global.govstack.statusframework.api.Status>> tx = new LinkedHashMap<>();
+            for (Map.Entry<Status, Set<Status>> e : TRANSITIONS.get(et).entrySet()) {
+                tx.put(e.getKey(),
+                       new LinkedHashSet<global.govstack.statusframework.api.Status>(e.getValue()));
+            }
+            Set<global.govstack.statusframework.api.Status> initial =
+                    new LinkedHashSet<global.govstack.statusframework.api.Status>(INITIAL_STATUS_MAP.get(et));
+            StatusFramework.register(et, tx, initial);
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────
-    //  Public API
+    //  Public API — delegates to StatusFramework
     // ──────────────────────────────────────────────────────────────────
 
     /**
      * Transition an entity's status. Validates the transition, writes the new
      * status to the entity's form table, and creates an audit log entry.
      *
-     * @param dao          Joget FormDataDao (pass in, or use {@link #getFormDataDao()})
-     * @param entityType   the entity being transitioned
-     * @param recordId     the primary key of the record
-     * @param targetStatus the desired new status
-     * @param triggeredBy  plugin name (e.g., "statement-importer") or "OPERATOR"
-     * @param reason       human-readable explanation
      * @throws InvalidTransitionException if the transition is not allowed
      */
-    public void transition(FormDataDao dao, EntityType entityType, String recordId,
-                           Status targetStatus, String triggeredBy, String reason)
+    public static void transition(FormDataDao dao, EntityType entityType, String recordId,
+                                  Status targetStatus, String triggeredBy, String reason)
             throws InvalidTransitionException {
-
-        String tableName = entityType.getTableName();
-
-        // 1. Load current record
-        FormRow row = dao.load(tableName, tableName, recordId);
-        if (row == null) {
-            throw new IllegalStateException(
-                    "Record not found: " + entityType + " / " + recordId);
-        }
-
-        // 2. Read current status
-        String currentStatusCode = row.getProperty("status");
-        Status currentStatus = null;
-        if (currentStatusCode != null && !currentStatusCode.isEmpty()) {
-            currentStatus = Status.fromCode(currentStatusCode);
-        }
-
-        // 3. Validate
-        if (!canTransition(entityType, currentStatus, targetStatus)) {
+        try {
+            StatusFramework.transition(dao, entityType, recordId,
+                    targetStatus, triggeredBy, reason);
+        } catch (global.govstack.statusframework.api.InvalidTransitionException e) {
+            // Rewrap framework's exception as gam-framework's specific subtype so
+            // all existing `catch (com.fiscaladmin.gam.framework.status.InvalidTransitionException)`
+            // sites in gam-plugins continue to work unchanged.
             throw new InvalidTransitionException(entityType, recordId,
-                    currentStatus, targetStatus);
+                    castStatus(e.getFromStatus()), castStatus(e.getToStatus()));
         }
-
-        // 4. Write new status
-        row.setProperty("status", targetStatus.getCode());
-        FormRowSet rowSet = new FormRowSet();
-        rowSet.add(row);
-        dao.saveOrUpdate(tableName, tableName, rowSet);
-
-        // 5. Write audit
-        String fromCode = currentStatus != null ? currentStatus.getCode() : "null";
-        TransitionAuditEntry audit = new TransitionAuditEntry(
-                entityType.toString(), recordId,
-                fromCode, targetStatus.getCode(),
-                triggeredBy, reason);
-        FormRowSet auditRowSet = new FormRowSet();
-        auditRowSet.add(audit.toFormRow());
-        dao.saveOrUpdate(AUDIT_TABLE, AUDIT_TABLE, auditRowSet);
-
-        // 6. Log
-        LogUtil.info(CLASS_NAME, "Status transition: " + entityType
-                + " " + recordId + " " + fromCode + " → " + targetStatus.getCode());
     }
 
     /**
-     * Pure validation — no database access.
-     * Returns {@code true} if the transition is allowed by the transition map.
-     * <p>
-     * When {@code currentStatus} is {@code null}, only "initial" statuses are
-     * allowed: NEW for most entities, OPEN for exceptions, AUTO_ACCEPTED or
-     * PENDING_REVIEW for pairs.
+     * Transition an entity's status using an explicit table name.
+     *
+     * @throws InvalidTransitionException if the transition is not allowed
      */
-    public boolean canTransition(EntityType entityType, Status currentStatus,
-                                 Status targetStatus) {
-        if (entityType == null || targetStatus == null) {
-            return false;
+    public static void transition(FormDataDao dao, String tableName, EntityType entityType,
+                                  String recordId, Status targetStatus,
+                                  String triggeredBy, String reason)
+            throws InvalidTransitionException {
+        try {
+            StatusFramework.transition(dao, tableName, entityType, recordId,
+                    targetStatus, triggeredBy, reason);
+        } catch (global.govstack.statusframework.api.InvalidTransitionException e) {
+            throw new InvalidTransitionException(entityType, recordId,
+                    castStatus(e.getFromStatus()), castStatus(e.getToStatus()));
         }
-
-        Map<Status, Set<Status>> entityMap = TRANSITIONS.get(entityType);
-        if (entityMap == null) {
-            return false;
-        }
-
-        // Handle null current status (new record without status yet)
-        if (currentStatus == null) {
-            return isInitialStatus(entityType, targetStatus);
-        }
-
-        Set<Status> validTargets = entityMap.get(currentStatus);
-        if (validTargets == null) {
-            return false;
-        }
-        return validTargets.contains(targetStatus);
     }
 
-    /**
-     * Returns the set of valid target statuses for the given entity and
-     * current status. Returns an empty set if the current status is terminal
-     * or if the entity/status combination is not found.
-     */
-    public Set<Status> getValidTransitions(EntityType entityType, Status currentStatus) {
-        if (entityType == null || currentStatus == null) {
-            return Collections.emptySet();
-        }
-        Map<Status, Set<Status>> entityMap = TRANSITIONS.get(entityType);
-        if (entityMap == null) {
-            return Collections.emptySet();
-        }
-        Set<Status> targets = entityMap.get(currentStatus);
-        if (targets == null) {
-            return Collections.emptySet();
-        }
-        return Collections.unmodifiableSet(targets);
+    public static boolean canTransition(EntityType entityType, Status currentStatus,
+                                        Status targetStatus) {
+        return StatusFramework.canTransition(entityType, currentStatus, targetStatus);
     }
 
-    // ──────────────────────────────────────────────────────────────────
-    //  Convenience
-    // ──────────────────────────────────────────────────────────────────
+    public static Set<Status> getValidTransitions(EntityType entityType, Status currentStatus) {
+        // Framework returns Set<api.Status>; narrow to Set<Status> for callers.
+        Set<global.govstack.statusframework.api.Status> raw =
+                StatusFramework.getValidTransitions(entityType, currentStatus);
+        if (raw.isEmpty()) return Collections.emptySet();
+        Set<Status> narrowed = EnumSet.noneOf(Status.class);
+        for (global.govstack.statusframework.api.Status s : raw) {
+            narrowed.add((Status) s);
+        }
+        return Collections.unmodifiableSet(narrowed);
+    }
 
-    /**
-     * Convenience method for callers who don't already hold a {@link FormDataDao}.
-     * Retrieves it from the Joget Spring application context.
-     */
+    public static boolean isInitialStatus(EntityType entityType, Status targetStatus) {
+        return StatusFramework.isInitialStatus(entityType, targetStatus);
+    }
+
     public static FormDataDao getFormDataDao() {
-        return (FormDataDao) AppUtil.getApplicationContext().getBean("formDataDao");
+        return StatusFramework.getFormDataDao();
     }
 
     // ──────────────────────────────────────────────────────────────────
-    //  Package-private for testing
+    //  Internal helpers
     // ──────────────────────────────────────────────────────────────────
 
-    /**
-     * Returns the transition map for testing purposes.
-     */
+    private static Status castStatus(global.govstack.statusframework.api.Status s) {
+        // Framework's CODE_INDEX is populated from gam Status values, so any
+        // Status it surfaces back to us IS a gam Status. Safe cast.
+        return s == null ? null : (Status) s;
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    //  Package-private — for testing only
+    // ──────────────────────────────────────────────────────────────────
+
+    /** Returns the local (gam) transition map. Used by snapshot tests. */
     static Map<EntityType, Map<Status, Set<Status>>> getTransitionMap() {
         return TRANSITIONS;
     }
 
-    // ──────────────────────────────────────────────────────────────────
-    //  Private helpers
-    // ──────────────────────────────────────────────────────────────────
-
-    /**
-     * Checks whether the target status is a valid initial status for the entity.
-     * This handles the case where a record has no status field set yet.
-     */
-    private boolean isInitialStatus(EntityType entityType, Status targetStatus) {
-        switch (entityType) {
-            case STATEMENT:
-            case BANK_TRX:
-            case SECU_TRX:
-                return targetStatus == Status.NEW;
-            case ENRICHMENT:
-                return targetStatus == Status.NEW;
-            case PAIR:
-                return targetStatus == Status.AUTO_ACCEPTED
-                        || targetStatus == Status.PENDING_REVIEW;
-            case EXCEPTION:
-                return targetStatus == Status.OPEN;
-            case POSTING_OPERATION:
-                return targetStatus == Status.PENDING;
-            default:
-                return false;
-        }
+    /** Returns the local (gam) initial-status map. Used by snapshot tests. */
+    static Map<EntityType, Set<Status>> getInitialStatusMap() {
+        return INITIAL_STATUS_MAP;
     }
 }

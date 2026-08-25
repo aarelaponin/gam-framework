@@ -5,13 +5,18 @@ package com.fiscaladmin.gam.framework.status;
  * <p>
  * Each enum constant maps to the <b>bare</b> Joget form table name
  * (without the {@code app_fd_} prefix that Joget adds automatically).
+ * <p>
+ * Implements {@link global.govstack.statusframework.api.EntityType} so GAM
+ * entities are first-class citizens of the shared joget-status-framework
+ * registry. External callers continue to reference {@code EntityType.STATEMENT}
+ * etc. exactly as before — no API change.
  */
-public enum EntityType {
+public enum EntityType implements global.govstack.statusframework.api.EntityType {
 
     STATEMENT("bank_statement"),
     BANK_TRX("bank_total_trx"),
     SECU_TRX("secu_total_trx"),
-    ENRICHMENT("trx_enrichment"),
+    ENRICHMENT("trxEnrichment"),
     PAIR("trx_pair"),
     EXCEPTION("exception_queue"),
     POSTING_OPERATION("posting_operation");

@@ -38,6 +38,13 @@
     </build>
 
     <dependencies>
+        <!-- Shared status framework — provides EntityType / Status interfaces + StatusFramework engine -->
+        <dependency>
+            <groupId>global.govstack</groupId>
+            <artifactId>joget-status-framework</artifactId>
+            <version>8.1-SNAPSHOT</version>
+        </dependency>
+
         <!-- Joget core — provided at runtime by the OSGi container -->
         <dependency>
             <groupId>org.joget</groupId>

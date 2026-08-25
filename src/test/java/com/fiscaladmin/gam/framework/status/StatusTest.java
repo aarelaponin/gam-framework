@@ -66,21 +66,21 @@ public class StatusTest {
         assertEquals(Status.MANUAL_REVIEW, Status.fromCode("Manual_Review"));
     }
 
-    // ── Error cases ─────────────────────────────────────────────────
+    // ── Null/unknown returns null ────────────────────────────────────
 
-    @Test(expected = IllegalArgumentException.class)
-    public void fromCode_unknownCode_throws() {
-        Status.fromCode("nonexistent");
+    @Test
+    public void fromCode_unknownCode_returnsNull() {
+        assertNull(Status.fromCode("nonexistent"));
     }
 
-    @Test(expected = IllegalArgumentException.class)
-    public void fromCode_null_throws() {
-        Status.fromCode(null);
+    @Test
+    public void fromCode_null_returnsNull() {
+        assertNull(Status.fromCode(null));
     }
 
-    @Test(expected = IllegalArgumentException.class)
-    public void fromCode_emptyString_throws() {
-        Status.fromCode("");
+    @Test
+    public void fromCode_emptyString_returnsNull() {
+        assertNull(Status.fromCode(""));
     }
 
     // ── getCode() returns lowercase DB value ────────────────────────
@@ -99,7 +99,7 @@ public class StatusTest {
     public void getLabel_returnsDisplayLabel() {
         assertEquals("New", Status.NEW.getLabel());
         assertEquals("Posting Ready", Status.POSTING_READY.getLabel());
-        assertEquals("Auto-Accepted", Status.AUTO_ACCEPTED.getLabel());
+        assertEquals("Auto Accepted", Status.AUTO_ACCEPTED.getLabel());
         assertEquals("In Progress", Status.IN_PROGRESS.getLabel());
     }
 

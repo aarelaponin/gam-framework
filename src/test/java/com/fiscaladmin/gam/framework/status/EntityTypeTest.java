@@ -26,7 +26,7 @@ public class EntityTypeTest {
 
     @Test
     public void enrichment_tableName() {
-        assertEquals("trx_enrichment", EntityType.ENRICHMENT.getTableName());
+        assertEquals("trxEnrichment", EntityType.ENRICHMENT.getTableName());
     }
 
     @Test
